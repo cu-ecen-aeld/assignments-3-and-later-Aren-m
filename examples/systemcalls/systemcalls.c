@@ -1,4 +1,9 @@
 #include "systemcalls.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,6 +21,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+	
+	int command_call = system(cmd);
+	
+	if (command_call != 0) 
+	{
+		return false;
+	}
 
     return true;
 }
@@ -59,6 +71,50 @@ bool do_exec(int count, ...)
  *
 */
 
+	if (command[0][0] != '/')
+	{
+		return false;
+	}
+	
+	char* command_args[count];
+	for (int j = 0; j < count-1; j++)
+	{
+		command_args[j] = command[j+1];
+
+		if (command_args[j][0] != '/' && command_args[j][0] != '-')
+		{
+			return false;
+		}
+	}
+
+	int pid = fork();
+	
+	if (pid == 0)
+	{
+		int sys_command = execv(command[0], command);
+		
+		if (sys_command != 0)
+		{
+			//printf("103 - sys_command: %d\n", sys_command);
+			return false;
+		}
+	}
+	else if (pid > 0)
+	{
+		int status;
+		int child_pid = waitpid(pid, &status, 0);
+		
+		if (child_pid == -1)
+		{
+			return false;
+		}
+	}
+	else if (pid < 0)
+	{
+		return false;
+	}
+	
+	
     va_end(args);
 
     return true;
@@ -87,11 +143,59 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 
 /*
  * TODO
- *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
+ *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a reference,
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
 */
+
+	if (command[0][0] != '/')
+	{
+		return false;
+	}
+
+	
+	int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+	if (fd < 0)
+	{
+		return false;
+	}
+
+	int pid = fork();
+	
+	if (pid == 0)
+	{
+		if (dup2(fd, 1) < 0)
+		{
+			close(fd);
+			return false;
+		}
+		
+		close(fd);
+		int sys_command = execv(command[0], command);
+		
+		if (sys_command != 0)
+		{
+			return false;
+		}
+	}
+	else if (pid > 0)
+	{
+		int status;
+		int child_pid = waitpid(pid, &status, 0);
+		
+		if (child_pid == -1)
+		{
+			close(fd);
+			return false;
+		}
+	}
+	else if (pid < 0)
+	{
+		close(fd);
+		return false;
+	}
+	
 
     va_end(args);
 

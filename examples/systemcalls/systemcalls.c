@@ -153,7 +153,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 	{
 		return false;
 	}
-
 	
 	int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
 	if (fd < 0)

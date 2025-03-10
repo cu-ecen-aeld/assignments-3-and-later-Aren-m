@@ -83,8 +83,6 @@ fi
 # TODO: Make and install busybox
 make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
 
-
-
 # TODO: Add library dependencies to rootfs
 cd ${OUTDIR}/rootfs
 cp ${SYSROOT}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib

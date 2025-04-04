@@ -1,10 +1,17 @@
 CROSS_COMPILE ?=
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -g -Wall -Werror
+TARGET ?= writer
+SRC = writer.c
+OBJS ?= $(SRC:.c=.o)
 
-TARGET := writer
+all: $(TARGET)
 
-all: 
-	$(CROSS_COMPILE)gcc -g -Wall -c -o $(TARGET).o $(TARGET).c
-	$(CROSS_COMPILE)gcc -g -Wall -I/ $(TARGET).o -o $(TARGET)
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
+	
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) *.o 
+	rm -f $(TARGET) $(OBJS)

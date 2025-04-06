@@ -35,7 +35,7 @@ rm -rf "${WRITEDIR}"
 # create $WRITEDIR if not assignment1
 assignment=`cat /etc/finder-app/conf/assignment.txt`
 
-if [ $assignment = 'assignment3' ]
+if [ $assignment = 'assignment4' ]
 then
 	mkdir -p "$WRITEDIR"
 

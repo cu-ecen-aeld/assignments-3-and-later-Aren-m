@@ -1,8 +1,9 @@
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = -g -Wall -Werror
-TARGET = aesdsocket
+CROSS_COMPILE ?=
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -g -Wall -Werror
+TARGET ?= aesdsocket
 SRC = aesdsocket.c
-OBJ = $(SRC:.c=.o)
+OBJ ?= $(SRC:.c=.o)
 
 all: $(TARGET)
 

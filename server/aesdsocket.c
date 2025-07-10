@@ -4,26 +4,50 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netdb.h>
+#include <sys/queue.h>
 #include <sys/wait.h>
+#include <netdb.h>
 #include <signal.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdbool.h>
+#include <pthread.h>
+#include <time.h>
 
 
 #define PORT "9000"
 #define BACKLOG 10
+#define FILE_PATH "/var/tmp/aesdsocketdata"
+#define SLIST_FOREACH_SAFE(var, head, field, tvar) \
+        for ((var) = SLIST_FIRST((head)); \
+            (var) && ((tvar) = SLIST_NEXT((var), field), 1); \
+            (var) = (tvar))
+
 
 volatile sig_atomic_t end_signal_caught = false;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// signal handling
+// thread args data struct
+struct thread_data
+{
+    char s[INET6_ADDRSTRLEN];
+    int threadfd;
+};
+
+// linked list of threads
+struct slist_data_s
+{
+    pthread_t* thread_id;
+    struct thread_data* args;
+    SLIST_ENTRY(slist_data_s) entries;
+};
+
+// signal handling: SIGINT = ctrl + c, SIGTERM = process term (kill())
 static void signal_handler(int signal_number)
 {
-    if((signal_number == SIGINT) || (signal_number == SIGTERM))
+    if ((signal_number == SIGINT) || (signal_number == SIGTERM))
     {
-        remove("/var/tmp/aesdsocketdata");
         end_signal_caught = true;
         syslog(LOG_INFO, "Caught signal, exiting");
     }       
@@ -33,40 +57,126 @@ static void signal_handler(int signal_number)
 static void make_daemon()
 {
     int pid = fork();
-
-    if(pid < 0)
-    {
-        printf("fork\n");
-        exit(1);
-    }
-        
-    if(pid > 0)
-    {
-        exit(0);
-    }
-
-    if(pid == 0)
+    if (pid == 0)
     {
         printf("daemon process started\n");
-        if(setsid() == -1)
+        if (setsid() == -1)
         {
             printf("daemon setid failure\n");
             exit(1);
         }
     }
+    else
+        exit( ( pid > 0 ) ? 0 : 1 ); 
+}
+
+void* fill_file(void* args)
+{
+    struct thread_data* thread_func_args = (struct thread_data *) args;
+    int thread_server_fd = (*thread_func_args).threadfd;
+    char threadbuf[512] = {0};
+    char *thread_client_address = (*thread_func_args).s;
+
+    int threadfiled = 0;
+    int threadreadlen = 0;
+    int threadwritestatus = 0;
+
+    if ((threadfiled = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
+    {
+        close((*thread_func_args).threadfd);
+        printf("open file socket thread\n");
+        exit(1);
+    }
+    
+    pthread_mutex_lock(&mutex);
+    while ((threadreadlen = recv(thread_server_fd, threadbuf, sizeof(threadbuf), 0)) > 0)
+    {
+        if ((threadwritestatus = write(threadfiled, threadbuf, threadreadlen)) == -1)
+        {
+            close(thread_server_fd);
+            printf("write to file\n");
+            pthread_mutex_unlock(&mutex); 
+            exit(1);
+        }
+        else if (memchr(threadbuf, '\n', threadreadlen) != NULL)
+        {
+            if (lseek(threadfiled, 0, SEEK_SET) == -1)
+            {
+                printf("reset file position\n");
+                pthread_mutex_unlock(&mutex); 
+                exit(1);
+            }
+
+            while ((threadreadlen = read(threadfiled, threadbuf, sizeof(threadbuf))) > 0)
+            {
+                send(thread_server_fd, threadbuf, threadreadlen, 0);
+            }
+
+            pthread_mutex_unlock(&mutex); 
+            close(threadfiled);
+            close(thread_server_fd);
+            syslog(LOG_INFO, "Closed connection from %s", thread_client_address);
+            break;
+        }
+    }   
+
+    return NULL;
+}
+
+void* append_timestamp(void* timeargs)
+{
+    int timerfiled = 0;
+    int timerwritestatus = 0;
+
+    while (!end_signal_caught)
+    {
+        sleep(10);
+
+        pthread_mutex_lock(&mutex);
+        time_t curtime = time(NULL);
+        char timestamp_str[50] = {0};
+        int len = strftime(timestamp_str, sizeof(timestamp_str), "timestamp: %Y %b %d %H:%M:%S\n", localtime(&curtime));
+
+        if (len == 0)
+        {
+            pthread_mutex_unlock(&mutex);
+            exit(1);
+        }
+
+        if(end_signal_caught)
+        {
+            pthread_mutex_unlock(&mutex);
+            exit(1);
+        }
+
+        if ((timerfiled = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
+        {
+            printf("open file timer thread\n");
+            pthread_mutex_unlock(&mutex);
+            exit(1);
+        }
+        if ((timerwritestatus = write(timerfiled, timestamp_str, len)) == -1)
+        {
+            close(timerfiled);
+            printf("write timestamp\n");
+            exit(1);
+        }
+
+        close(timerfiled);
+        pthread_mutex_unlock(&mutex);
+    }
+    
+    return NULL;
 }
 
 // to get IPv4 or IPv6 address from client
 void *get_in_addr(struct sockaddr *sa)
 {
-    if(sa->sa_family == AF_INET)
-    {
+    if (sa->sa_family == AF_INET)
         return &(((struct sockaddr_in*)sa)->sin_addr);
-    }
     
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
-
 
 int main(int argc, char *argv[])
 {
@@ -85,38 +195,37 @@ int main(int argc, char *argv[])
     socklen_t sin_size = sizeof(client_addr);
     char s[INET6_ADDRSTRLEN];
 
-    int filed = 0;
-    int readlen = 0;
-    int writestatus = 0;
-    char msgbuf[512] = {0};
+    SLIST_HEAD(slisthead, slist_data_s) head;
+    SLIST_INIT(&head);
+    struct slist_data_s *datap, *datap_temp;
 
-    memset(&hints, 0, sizeof hints);
+    memset(&hints, 0, sizeof(hints));
     hints.ai_family = PF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
-    if((addrstatus = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0)
+    if ((addrstatus = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0)
     {
         printf("getaddrinfo\n");
         exit(-1);
     }
 
     // servinfo points to linked list of struct of addrinfos, loop through and bind to first available
-    for(p = servinfo; p != NULL; p = p->ai_next)
+    for (p = servinfo; p != NULL; p = p->ai_next)
     {
-        if((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
         {
             printf("open socket\n");
             continue;
         }
 
-        if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yep, sizeof(int)) == -1)
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yep, sizeof(int)) == -1)
         {
             printf("setsockopt\n");
             exit(1);
         }
 
-        if(bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
+        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
         {
             close(sockfd);
             printf("bind socket\n");
@@ -128,13 +237,13 @@ int main(int argc, char *argv[])
 
     freeaddrinfo(servinfo);
 
-    if(p == NULL)
+    if (p == NULL)
     {
-        printf("failed to bind\n");
+        printf("servinfo null\n");
         return -1;
     }
 
-    if(listen(sockfd, BACKLOG) == -1)
+    if (listen(sockfd, BACKLOG) == -1)
     {
         close(sockfd);
         printf("listen on socket\n");
@@ -142,65 +251,58 @@ int main(int argc, char *argv[])
     }
 
     // fork after ensuring can bind on port
-    if(argc == 2)
+    if (argc == 2)
     {
-        if(strcmp(argv[1], "-d") == 0)
-        {
-            make_daemon();
-        }       
-    }
+        if (strcmp(argv[1], "-d") == 0)
+            make_daemon();       
+    }    
+
+    // init timer thread
+    pthread_t *timer_thread = malloc(sizeof(pthread_t));
+    pthread_create(timer_thread, NULL, append_timestamp, NULL);
 
     // loop the process here until receive sigint or sigterm, then gracefully exit closing connections and deleting output file
-    while(!end_signal_caught)
+    while (!end_signal_caught)
     {
-        if((newfd = accept(sockfd, (struct sockaddr *)&client_addr, &sin_size)) == -1)
+        struct sockaddr* client_sock_addr = (struct sockaddr*)&client_addr;
+        if ((newfd = accept(sockfd, client_sock_addr, &sin_size)) == -1)
         {
             printf("accept socket\n");
-            exit(-1);
+            continue;
         }
 
-        inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), s, sizeof(s));
-
+        inet_ntop(client_addr.ss_family, get_in_addr(client_sock_addr), s, sizeof(s));
         syslog(LOG_INFO, "Accepted connection from %s", s);
-    
-        // read and return full data back to client when completed datapacket
-        if((filed = open("/var/tmp/aesdsocketdata", O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
-        {
-            close(newfd);
-            printf("open file\n");
-            exit(1);
-        }
 
-        while((readlen = recv(newfd, msgbuf, sizeof(msgbuf), 0)) > 0)
-        {
-            if((writestatus = write(filed, msgbuf, readlen)) == -1)
-            {
-                close(newfd);
-                printf("write to file\n");
-                exit(1);
-            }
-            else if(memchr(msgbuf, '\n', readlen) != NULL)
-            {
-                //  send to client from file
-                if(lseek(filed, 0, SEEK_SET) == -1)
-                {
-                    printf("reset file descriptor\n");
-                    exit(1);
-                }
+        struct thread_data* arg_data = malloc(sizeof(struct thread_data));
+        strncpy(arg_data->s, s, INET6_ADDRSTRLEN);
+        arg_data->threadfd = newfd;
+        
+        datap = malloc(sizeof(struct slist_data_s));
+        datap->thread_id = malloc(sizeof(pthread_t));
+        datap->args = arg_data;
+        SLIST_INSERT_HEAD(&head, datap, entries);
 
-                while((readlen = read(filed, msgbuf, sizeof(msgbuf))) > 0)
-                {
-                    send(newfd, msgbuf, readlen, 0);
-                }
-            }
-        }
-
-        close(filed);
-        close(newfd);
-        syslog(LOG_INFO, "Closed connection from %s", s);
+        pthread_create(datap->thread_id, NULL, fill_file, arg_data);
     }
     
     close(sockfd);
+
+    SLIST_FOREACH_SAFE(datap, &head, entries, datap_temp)
+    {
+        pthread_join(*(datap->thread_id), NULL);
+        free(datap->args);
+        free(datap->thread_id);
+        SLIST_REMOVE(&head, datap, slist_data_s, entries);
+        free(datap);
+    }
+
+    pthread_cancel(*timer_thread);
+    pthread_join(*timer_thread, NULL);
+    free(timer_thread);
+    pthread_mutex_destroy(&mutex);
+
+    remove(FILE_PATH);
 
     return 0;
 }

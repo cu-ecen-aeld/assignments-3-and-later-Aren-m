@@ -16,6 +16,8 @@
 
 #include "aesd-circular-buffer.h"
 
+#include <stdio.h>
+
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
  * @param char_offset the position to search for in the buffer list, describing the zero referenced
@@ -29,9 +31,25 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
+    uint8_t index = 0;
+    struct aesd_buffer_entry *entry;
+
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, buffer, index)
+    {
+        entry = (index+buffer->out_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) ? \
+                &((buffer)->entry[index+buffer->out_offs-AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED]) \
+                : &((buffer)->entry[index+buffer->out_offs]);
+
+        if(char_offset >= entry->size)
+        {
+            char_offset -= entry->size;
+            continue;
+        }
+  
+        *entry_offset_byte_rtn = char_offset;
+        return entry;
+    }
+
     return NULL;
 }
 
@@ -44,9 +62,22 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description
-    */
+    buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->in_offs++;
+
+    if(buffer->in_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+        buffer->in_offs = 0;
+
+    if(!buffer->full)
+        buffer->full = (buffer->in_offs == buffer->out_offs) ? true : false;
+    else
+    {
+        buffer->out_offs++;
+        if(buffer->out_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+            buffer->out_offs = 0;
+    }
+
+    return;
 }
 
 /**

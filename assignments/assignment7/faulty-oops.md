@@ -1,5 +1,6 @@
-Oops message when running echo “hello_world” > /dev/faulty in the qemu instance:
-
+## faulty oops analysis
+### Oops message when running echo “hello_world” > /dev/faulty in the qemu instance:
+```
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 Mem abort info:
   ESR = 0x0000000096000045
@@ -42,13 +43,13 @@ Call trace:
  el0t_64_sync+0x18c/0x190
 Code: d2800001 d2800000 d503233f d50323bf (b900003f) 
 ---[ end trace 0000000000000000 ]---
-
+```
 
 We can see the problem here is that we are dereferencing a null pointer in the kernel, in the faulty module.
 More specifically, we can see it occur in the faulty_write function.
 When we use objdump on faulty.ko, we get this output for faulty_write:
 
-
+```
 Disassembly of section .text:
 
 0000000000000000 <faulty_write>:
@@ -60,7 +61,7 @@ Disassembly of section .text:
   14:	d65f03c0 	ret
   18:	d503201f 	nop
   1c:	d503201f 	nop
-
+```
 
 We move 0 into x1 registry right away, and later dereference x1. This causes the null pointer dereference!
 

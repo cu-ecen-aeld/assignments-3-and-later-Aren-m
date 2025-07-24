@@ -56,7 +56,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         return -ERESTARTSYS;
 
     size_t entry_offset;
-    struct aesd_buffer_entry* buf_read = aesd_circular_buffer_find_entry_offset_for_fpos(&dev.buffer, *f_pos, &entry_offset);
+    struct aesd_buffer_entry* buf_read = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset);
 
     if(!buf_read)
         goto escape;
@@ -131,8 +131,12 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if(memchr(dev->partial_write, '\n', dev->partial_write_size) != NULL)
     {
         full_size = dev->partial_write_size;
-        add_entry.buffptr = kmalloc(full_size, GFP_KERNEL);
-        memcpy(add_entry.buffptr, dev->partial_write, full_size);
+        char *entrybuf = kmalloc(full_size, GFP_KERNEL);
+        if(!entrybuf)
+            goto escape;
+
+        memcpy(entrybuf, dev->partial_write, full_size);
+        add_entry.buffptr = entrybuf;
         add_entry.size = full_size;
 
         if(dev->buffer.full)

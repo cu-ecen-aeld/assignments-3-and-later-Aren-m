@@ -30,7 +30,7 @@ struct aesd_dev
 {
      struct mutex lock;
      struct aesd_circular_buffer buffer;
-     char partial_write*;
+     char *partial_write;
      size_t partial_write_size;
      struct cdev cdev;     /* Char device structure */
 };

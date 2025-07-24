@@ -90,7 +90,13 @@ void* fill_file(void* args)
     int threadreadlen = 0;
     int threadwritestatus = 0;
 
-    if ((threadfiled = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
+#if USE_AESD_CHAR_DEVICE
+    int flags = O_RDWR | O_APPEND;
+#else
+    int flags = O_RDWR | O_APPEND | O_CREAT;
+#endif
+
+    if ((threadfiled = open(FILE_PATH, flags, 0666)) == -1)
     {
         close((*thread_func_args).threadfd);
         printf("open file socket thread\n");
@@ -107,12 +113,14 @@ void* fill_file(void* args)
             pthread_mutex_unlock(&mutex); 
             exit(1);
         }
-        else if (memchr(threadbuf, '\n', threadreadlen) != NULL)
+
+        if (memchr(threadbuf, '\n', threadreadlen) != NULL)
         {
-            if (lseek(threadfiled, 0, SEEK_SET) == -1)
+            close(threadfiled);
+            if ((threadfiled = open(FILE_PATH, O_RDONLY)) == -1)
             {
-                printf("reset file position\n");
-                pthread_mutex_unlock(&mutex); 
+                printf("reopen file for reading\n");
+                pthread_mutex_unlock(&mutex);
                 exit(1);
             }
 

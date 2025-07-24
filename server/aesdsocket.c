@@ -15,10 +15,19 @@
 #include <pthread.h>
 #include <time.h>
 
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
 
 #define PORT "9000"
 #define BACKLOG 10
+
+#if USE_AESD_CHAR_DEVICE
+#define FILE_PATH "/dev/aesdchar"
+#else
 #define FILE_PATH "/var/tmp/aesdsocketdata"
+#endif
+
 #define SLIST_FOREACH_SAFE(var, head, field, tvar) \
         for ((var) = SLIST_FIRST((head)); \
             (var) && ((tvar) = SLIST_NEXT((var), field), 1); \
@@ -255,11 +264,13 @@ int main(int argc, char *argv[])
     {
         if (strcmp(argv[1], "-d") == 0)
             make_daemon();       
-    }    
+    }
 
+#if !USE_AESD_CHAR_DEVICE
     // init timer thread
     pthread_t *timer_thread = malloc(sizeof(pthread_t));
     pthread_create(timer_thread, NULL, append_timestamp, NULL);
+#endif
 
     // loop the process here until receive sigint or sigterm, then gracefully exit closing connections and deleting output file
     while (!end_signal_caught)
@@ -297,12 +308,13 @@ int main(int argc, char *argv[])
         free(datap);
     }
 
+#if !USE_AESD_CHAR_DEVICE
     pthread_cancel(*timer_thread);
     pthread_join(*timer_thread, NULL);
     free(timer_thread);
-    pthread_mutex_destroy(&mutex);
-
     remove(FILE_PATH);
+#endif
 
+    pthread_mutex_destroy(&mutex);
     return 0;
 }

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <time.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #ifndef USE_AESD_CHAR_DEVICE
 #define USE_AESD_CHAR_DEVICE 1
@@ -55,7 +56,7 @@ struct slist_data_s
 // signal handling: SIGINT = ctrl + c, SIGTERM = process term (kill())
 static void signal_handler(int signal_number)
 {
-    if ((signal_number == SIGINT) || (signal_number == SIGTERM))
+    if((signal_number == SIGINT) || (signal_number == SIGTERM))
     {
         end_signal_caught = true;
         syslog(LOG_INFO, "Caught signal, exiting");
@@ -66,10 +67,10 @@ static void signal_handler(int signal_number)
 static void make_daemon()
 {
     int pid = fork();
-    if (pid == 0)
+    if(pid == 0)
     {
         printf("daemon process started\n");
-        if (setsid() == -1)
+        if(setsid() == -1)
         {
             printf("daemon setid failure\n");
             exit(1);
@@ -81,7 +82,7 @@ static void make_daemon()
 
 void* fill_file(void* args)
 {
-    struct thread_data* thread_func_args = (struct thread_data *) args;
+    struct thread_data* thread_func_args = (struct thread_data *)args;
     int thread_server_fd = (*thread_func_args).threadfd;
     char threadbuf[512] = {0};
     char *thread_client_address = (*thread_func_args).s;
@@ -96,7 +97,7 @@ void* fill_file(void* args)
     int flags = O_RDWR | O_APPEND | O_CREAT;
 #endif
 
-    if ((threadfiled = open(FILE_PATH, flags, 0666)) == -1)
+    if((threadfiled = open(FILE_PATH, flags, 0666)) == -1)
     {
         close((*thread_func_args).threadfd);
         printf("open file socket thread\n");
@@ -104,9 +105,43 @@ void* fill_file(void* args)
     }
     
     pthread_mutex_lock(&mutex);
-    while ((threadreadlen = recv(thread_server_fd, threadbuf, sizeof(threadbuf), 0)) > 0)
+    while((threadreadlen = recv(thread_server_fd, threadbuf, sizeof(threadbuf), 0)) > 0)
     {
-        if ((threadwritestatus = write(threadfiled, threadbuf, threadreadlen)) == -1)
+        if(strncmp(threadbuf, "AESDCHAR_IOCSEEKTO:", strlen("AESDCHAR_IOCSEEKTO:")) == 0)
+        {
+            char* args = threadbuf + strlen("AESDCHAR_IOCSEEKTO:");
+            char* separator = strchr(args, ',');
+            if(!separator)
+            {
+                pthread_mutex_unlock(&mutex); 
+                close(threadfiled);
+                close(thread_server_fd);
+                printf("malformed input\n");
+                exit(1);
+            }
+
+            *separator = '\0';
+            struct aesd_seekto seekto = 
+            {
+                .write_cmd = atoi(args),
+                .write_cmd_offset = atoi(separator + 1)
+            };
+
+            ioctl(threadfiled, AESDCHAR_IOCSEEKTO, &seekto);
+
+            while((threadreadlen = read(threadfiled, threadbuf, sizeof(threadbuf))) > 0)
+                send(thread_server_fd, threadbuf, threadreadlen, 0);
+
+            pthread_mutex_unlock(&mutex); 
+            close(threadfiled);
+            close(thread_server_fd);
+            syslog(LOG_INFO, "Closed connection from %s", thread_client_address);
+            
+            break;
+        }
+
+
+        if((threadwritestatus = write(threadfiled, threadbuf, threadreadlen)) == -1)
         {
             close(thread_server_fd);
             printf("write to file\n");
@@ -114,20 +149,18 @@ void* fill_file(void* args)
             exit(1);
         }
 
-        if (memchr(threadbuf, '\n', threadreadlen) != NULL)
+        if(memchr(threadbuf, '\n', threadreadlen) != NULL)
         {
             close(threadfiled);
-            if ((threadfiled = open(FILE_PATH, O_RDONLY)) == -1)
+            if((threadfiled = open(FILE_PATH, O_RDONLY)) == -1)
             {
                 printf("reopen file for reading\n");
                 pthread_mutex_unlock(&mutex);
                 exit(1);
             }
 
-            while ((threadreadlen = read(threadfiled, threadbuf, sizeof(threadbuf))) > 0)
-            {
+            while((threadreadlen = read(threadfiled, threadbuf, sizeof(threadbuf))) > 0)
                 send(thread_server_fd, threadbuf, threadreadlen, 0);
-            }
 
             pthread_mutex_unlock(&mutex); 
             close(threadfiled);
@@ -145,7 +178,7 @@ void* append_timestamp(void* timeargs)
     int timerfiled = 0;
     int timerwritestatus = 0;
 
-    while (!end_signal_caught)
+    while(!end_signal_caught)
     {
         sleep(10);
 
@@ -154,7 +187,7 @@ void* append_timestamp(void* timeargs)
         char timestamp_str[50] = {0};
         int len = strftime(timestamp_str, sizeof(timestamp_str), "timestamp: %Y %b %d %H:%M:%S\n", localtime(&curtime));
 
-        if (len == 0)
+        if(len == 0)
         {
             pthread_mutex_unlock(&mutex);
             exit(1);
@@ -166,13 +199,13 @@ void* append_timestamp(void* timeargs)
             exit(1);
         }
 
-        if ((timerfiled = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
+        if((timerfiled = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, 0666)) == -1)
         {
             printf("open file timer thread\n");
             pthread_mutex_unlock(&mutex);
             exit(1);
         }
-        if ((timerwritestatus = write(timerfiled, timestamp_str, len)) == -1)
+        if((timerwritestatus = write(timerfiled, timestamp_str, len)) == -1)
         {
             close(timerfiled);
             printf("write timestamp\n");
@@ -189,7 +222,7 @@ void* append_timestamp(void* timeargs)
 // to get IPv4 or IPv6 address from client
 void *get_in_addr(struct sockaddr *sa)
 {
-    if (sa->sa_family == AF_INET)
+    if(sa->sa_family == AF_INET)
         return &(((struct sockaddr_in*)sa)->sin_addr);
     
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
@@ -221,28 +254,28 @@ int main(int argc, char *argv[])
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
-    if ((addrstatus = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0)
+    if((addrstatus = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0)
     {
         printf("getaddrinfo\n");
         exit(-1);
     }
 
     // servinfo points to linked list of struct of addrinfos, loop through and bind to first available
-    for (p = servinfo; p != NULL; p = p->ai_next)
+    for(p = servinfo; p != NULL; p = p->ai_next)
     {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
+        if((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
         {
             printf("open socket\n");
             continue;
         }
 
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yep, sizeof(int)) == -1)
+        if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yep, sizeof(int)) == -1)
         {
             printf("setsockopt\n");
             exit(1);
         }
 
-        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
+        if(bind(sockfd, p->ai_addr, p->ai_addrlen) == -1)
         {
             close(sockfd);
             printf("bind socket\n");
@@ -254,13 +287,13 @@ int main(int argc, char *argv[])
 
     freeaddrinfo(servinfo);
 
-    if (p == NULL)
+    if(p == NULL)
     {
         printf("servinfo null\n");
         return -1;
     }
 
-    if (listen(sockfd, BACKLOG) == -1)
+    if(listen(sockfd, BACKLOG) == -1)
     {
         close(sockfd);
         printf("listen on socket\n");
@@ -268,7 +301,7 @@ int main(int argc, char *argv[])
     }
 
     // fork after ensuring can bind on port
-    if (argc == 2)
+    if(argc == 2)
     {
         if (strcmp(argv[1], "-d") == 0)
             make_daemon();       
@@ -281,10 +314,10 @@ int main(int argc, char *argv[])
 #endif
 
     // loop the process here until receive sigint or sigterm, then gracefully exit closing connections and deleting output file
-    while (!end_signal_caught)
+    while(!end_signal_caught)
     {
         struct sockaddr* client_sock_addr = (struct sockaddr*)&client_addr;
-        if ((newfd = accept(sockfd, client_sock_addr, &sin_size)) == -1)
+        if((newfd = accept(sockfd, client_sock_addr, &sin_size)) == -1)
         {
             printf("accept socket\n");
             continue;

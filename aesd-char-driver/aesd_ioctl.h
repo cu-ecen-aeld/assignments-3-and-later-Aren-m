@@ -4,7 +4,7 @@
  *  Created on: Oct 23, 2019
  *      Author: Dan Walkes
  *
- *  @brief Definitins for the ioctl used on aesd char devices for assignment 9
+ *  @brief Definitions for the ioctl used on aesd char devices for assignment 9
  */
 
 #ifndef AESD_IOCTL_H
